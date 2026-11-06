@@ -1004,24 +1004,27 @@ at least 9 GiB available, so an ~8 GiB WSL VM refuses it; this builder uses the
 owner-approved 12 GB WSL limit in the [host profile](../host/README.md). See the
 [assembly memory checkpoint](../evidence/G2_ASSEMBLY_MEMORY_2026-10-26.md).
 
-### External build drive (including Windows D: / exFAT)
+### External build drive (Windows E:, NTFS)
 
-For this machine's dedicated all-build-storage-on-D: setup, see the
-[host profile](../host/README.md). Once installed and verified, `build.sh`
-automatically selects its isolated D-backed Docker daemon and checks the
-actual Linux store and D: capacity instead of reserving 8 GiB on C:. The
-explicit entry point is `bash native/image/build-on-d.sh desktop NEXT_SEQUENCE`.
-The source checkout stays on C:. Missing D: storage is an error, not a fallback.
+For this machine's dedicated all-build-storage-on-E: setup, see the
+[host profile](../host/README.md). The build drive moved from D: (exFAT USB)
+to E: (NTFS NVMe) on 2026-11-05; older records that name `D:\LumaOS-builds`
+refer to the same relative paths, now under `E:\LumaOS-builds`. Once installed
+and verified, `build.sh` automatically selects its isolated E-backed Docker
+daemon and checks the actual Linux store and E: capacity instead of reserving
+8 GiB on C:. The explicit entry point is still named
+`bash native/image/build-on-d.sh desktop NEXT_SEQUENCE` (a historical name).
+The source checkout stays on C:. Missing E: storage is an error, not a fallback.
 The generic external-artifact instructions below describe the older profile,
 which leaves Docker's Linux workspace on its existing backing drive.
 
 Create a dedicated directory on the selected drive and ensure WSL can access it.
-For this environment it is `D:\LumaOS-builds`, exposed as `/mnt/d/LumaOS-builds`.
-If WSL has not mounted D:, an authorized operator can mount it with
-`sudo mkdir -p /mnt/d` and `sudo mount -t drvfs D: /mnt/d`; do not format the drive.
+For this environment it is `E:\LumaOS-builds`, exposed as `/mnt/e/LumaOS-builds`.
+If WSL has not mounted E:, an authorized operator can mount it with
+`sudo mkdir -p /mnt/e` and `sudo mount -t drvfs E: /mnt/e`; do not format the drive.
 
 ```sh
-LUMA_BUILD_ROOT=/mnt/d/LumaOS-builds \
+LUMA_BUILD_ROOT=/mnt/e/LumaOS-builds \
 LUMA_RUNTIME_ARCHIVE=/absolute/path/to/verified-runtime-cache.tar.gz \
 bash native/image/build.sh headless NEXT_SEQUENCE
 ```
@@ -1035,9 +1038,9 @@ Docker volume. No Docker-wide storage relocation occurs. Preflight requires
 and 8 GiB on the repository drive;
 also check Docker's actual backing drive. Do not unplug the drive during work.
 
-For VM evaluation bind `D:/LumaOS-builds/work/BUILD-ID` (WSL path
-`/mnt/d/LumaOS-builds/work/BUILD-ID`) at `/work` in place of the build-volume
-mount in the commands below. Disk files and evidence then stay on D:. Unix
+For VM evaluation bind `E:/LumaOS-builds/work/BUILD-ID` (WSL path
+`/mnt/e/LumaOS-builds/work/BUILD-ID`) at `/work` in place of the build-volume
+mount in the commands below. Disk files and evidence then stay on E:. Unix
 control sockets are temporary and remain inside the container's `/tmp`.
 An exFAT drive is not a Unix root filesystem or a production secret store.
 Generated test disks contain only disposable fixtures; never use production

@@ -1,5 +1,5 @@
 [Unit]
-Description=Luma isolated D-backed Docker build daemon
+Description=Luma isolated E-backed Docker build daemon
 Requires=luma-build-store.service luma-build-containerd.service
 After=luma-build-store.service luma-build-containerd.service network-online.target
 Wants=network-online.target

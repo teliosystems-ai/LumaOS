@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string] $WorkRoot = 'D:\LumaOS-builds',
+    [string] $WorkRoot = 'E:\LumaOS-builds',
     [string] $SecurityWorkRoot = 'C:\Users\hakim\LumaOS\.luma',
     [string] $OpenSslPath = 'C:\Program Files\Git\usr\bin\openssl.exe'
 )

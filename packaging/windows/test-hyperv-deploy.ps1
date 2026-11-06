@@ -6,11 +6,11 @@ param([Parameter(Mandatory)][string] $WorkRoot)
 # observation inside the fresh public planner child, which is never -Apply.
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if ($env:OS -cne 'Windows_NT' -or $WorkRoot -notmatch '\AD:\\LumaOS-builds(?:\\[A-Za-z0-9_. -]+)*\z') {
-    throw 'Native Windows tests require existing D:\LumaOS-builds scratch.'
+if ($env:OS -cne 'Windows_NT' -or $WorkRoot -notmatch '\AE:\\LumaOS-builds(?:\\[A-Za-z0-9_. -]+)*\z') {
+    throw 'Native Windows tests require existing E:\LumaOS-builds scratch.'
 }
 $parent=Get-Item -LiteralPath $WorkRoot -Force
-if ($parent -isnot [IO.DirectoryInfo]) { throw 'Existing D scratch directory required.' }
+if ($parent -isnot [IO.DirectoryInfo]) { throw 'Existing E scratch directory required.' }
 $walk=$parent
 while ($null -ne $walk) {
     if (($walk.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'No scratch reparse ancestors.' }
@@ -143,6 +143,11 @@ try {
     [Array]::Copy((Ascii 'vhdxfile'),0,$vhdx,0,8)
     $download=Join-Path $scratch 'download'
     $null=New-Item -ItemType Directory -Path $download
+    # Folders made while the media leases are held go under $work. On NTFS a new
+    # entry changes its parent's last-write time, and the lease compares that time
+    # for every media ancestor (the drive root, $scratch and $download).
+    $work=Join-Path $scratch 'work'
+    $null=New-Item -ItemType Directory -Path $work
     $isoPath=Join-Path $download 'luma-live-fixture.iso'; [IO.File]::WriteAllBytes($isoPath,$iso)
     $vhdxPath=Join-Path $download 'luma-live-fixture.vhdx'; [IO.File]::WriteAllBytes($vhdxPath,$vhdx)
     $isoHash=Hash-Data $iso; $vhdxHash=Hash-Data $vhdx
@@ -183,7 +188,7 @@ try {
         Refuses { [IO.File]::Move($isoPath,(Join-Path $download 'moved.iso')) } '*' 'Held media allowed a rename.'
 
         # ---- Checksum mismatch and media refusals ---------------------------
-        $wrong=Join-Path $scratch 'wrong'; $null=New-Item -ItemType Directory -Path $wrong
+        $wrong=Join-Path $work 'wrong'; $null=New-Item -ItemType Directory -Path $wrong
         $wrongIso=Join-Path $wrong 'luma-live-fixture.iso'; [IO.File]::WriteAllBytes($wrongIso,$iso)
         [byte[]]$wrongSums=Ascii (('e'*64)+'  luma-live-fixture.iso'+"`n")
         $wrongSumsPath=Join-Path $wrong 'SHA256SUMS'; [IO.File]::WriteAllBytes($wrongSumsPath,$wrongSums)
@@ -202,6 +207,9 @@ try {
         Refuses { [Luma.Windows.HyperVMediaLease]::Acquire($small,(Hash-Data $tiny)).Dispose() } '*1MiB-64GiB*' 'Undersized media accepted.'
 
         # ---- Host prerequisite evaluation -----------------------------------
+        # Plans target the scratch drive (the build drive), so the planned VM
+        # root, the observed storage drive and -StorageDrive always agree.
+        $drive=$scratch.Substring(0,1).ToUpperInvariant()
         $capable=[pscustomobject][ordered]@{ schema_version=1; observation_only=$true; observed_at_utc='2026-11-03T00:00:00Z'
             elevated=$true; hyperv_administrators_member=$false; os_build=26200L; os_architecture='AMD64'
             os_caption='Microsoft Windows 11 Pro'; edition='Professional'; hyperv_feature_state='Enabled'
@@ -211,8 +219,8 @@ try {
             total_memory_bytes=32L*1GB; available_memory_bytes=20L*1GB; logical_processors=16L; wsl_running=$false
             wsl_vm_working_set_bytes=0L; wsl_distributions=@(); wsl_memory_limit_bytes=16L*1GB
             wsl_memory_limit_source='wsl-default-50-percent'
-            storage=[pscustomobject][ordered]@{ drive='D'; ready=$true; drive_type='Fixed'; format='NTFS'; free_bytes=500L*1GB; total_bytes=1000L*1GB }
-            image_storage=[pscustomobject][ordered]@{ drive='D'; ready=$true; drive_type='Fixed'; format='NTFS'; free_bytes=500L*1GB; total_bytes=1000L*1GB }
+            storage=[pscustomobject][ordered]@{ drive=$drive; ready=$true; drive_type='Fixed'; format='NTFS'; free_bytes=500L*1GB; total_bytes=1000L*1GB }
+            image_storage=[pscustomobject][ordered]@{ drive=$drive; ready=$true; drive_type='Fixed'; format='NTFS'; free_bytes=500L*1GB; total_bytes=1000L*1GB }
             tpm_present='yes'; tpm_source='Win32_Tpm' }
         $report=Test-LumaHyperVHost -Observation $capable
         Check ($report.host_capable -and @($report.blocking_checks).Count -eq 0) ('Capable host refused: '+(@($report.blocking_checks) -join ','))
@@ -271,8 +279,8 @@ try {
         Refuses { Test-LumaHyperVHost -Observation $bad } '*closed bound*' 'String memory size accepted.'
 
         # ---- Deployment plan ------------------------------------------------
-        $vmRoot=Join-Path $scratch 'vms'
-        $plan=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot $vmRoot
+        $vmRoot=Join-Path $work 'vms'
+        $plan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot $vmRoot
         Check ($plan.apply_admitted -and @($plan.blockers).Count -eq 0) ('Capable plan blocked: '+(@($plan.blockers) -join ' | '))
         Check ($plan.generation -eq 2 -and $plan.fixed_memory_bytes -eq 8L*1GB -and $plan.processor_count -eq 4 -and
             $plan.target_disk_bytes -eq 128L*1GB) 'Plan shape differs.'
@@ -291,7 +299,8 @@ try {
         Check ($plan.vm_directory -ceq ($vmRoot+'\LumaOS-Desktop-Lab') -and
             $plan.media_copy_path -ceq ($vmRoot+'\LumaOS-Desktop-Lab\Media\luma-live-fixture.iso') -and
             $plan.target_vhdx_path -ceq ($vmRoot+'\LumaOS-Desktop-Lab\Disks\LumaOS-Desktop-Lab-target.vhdx')) 'Plan paths differ.'
-        Check ((Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord).vm_root -ceq 'D:\LumaOS-VMs') 'Default VM root differs.'
+        $defaultDrive=Copy-Data $capable; $defaultDrive.storage.drive='D'
+        Check ((Test-LumaHyperVDeployment -Observation $defaultDrive -Media $isoRecord).vm_root -ceq 'D:\LumaOS-VMs') 'Default VM root differs.'
         $blockedRows=@(
             @{ Observation=$laptop; Like='host check edition*' },
             @{ GuestMemoryGiB=6; Like='host check guest_memory_floor*' },
@@ -300,28 +309,28 @@ try {
             @{ SwitchName='Missing'; Like='*not observed exactly once*' },
             @{ EnableIntegrationService=@('Bogus'); Like='Unknown integration service*' },
             @{ ObservationSource='pinned-captured-data'; Like='*captured observation*' },
-            @{ Name='LumaOS-'+('x'*48); VmRoot=('D:\'+('r'*63)+'\'+('s'*63)); Like='*240 characters*' })
+            @{ Name='LumaOS-'+('x'*48); VmRoot=($drive+':\'+('r'*63)+'\'+('s'*63)); Like='*240 characters*' })
         foreach ($row in $blockedRows) {
-            $arguments=@{ Observation=$capable; Media=$isoRecord; VmRoot=$vmRoot }
+            $arguments=@{ StorageDrive=$drive; Observation=$capable; Media=$isoRecord; VmRoot=$vmRoot }
             foreach ($key in @($row.Keys)) { if ($key -cne 'Like') { $arguments[$key]=$row[$key] } }
             $actual=Test-LumaHyperVDeployment @arguments
             Check (-not $actual.apply_admitted -and @($actual.blockers | Where-Object { $_ -like $row.Like }).Count -ge 1) ('Missing plan blocker: '+$row.Like)
         }
         $bad=Copy-Data $capable; $bad.hyperv_feature_state='Absent'
-        Check (-not (Test-LumaHyperVDeployment -Observation $bad -Media $isoRecord -VmRoot $vmRoot).apply_admitted) 'Plan admitted without Hyper-V.'
+        Check (-not (Test-LumaHyperVDeployment -StorageDrive $drive -Observation $bad -Media $isoRecord -VmRoot $vmRoot).apply_admitted) 'Plan admitted without Hyper-V.'
         $bad=Copy-Data $capable; $bad.total_memory_bytes=11L*1GB
-        Check (-not (Test-LumaHyperVDeployment -Observation $bad -Media $isoRecord -VmRoot $vmRoot).apply_admitted) 'Plan admitted without memory headroom.'
-        $networked=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot $vmRoot -SwitchName 'LumaLab' `
+        Check (-not (Test-LumaHyperVDeployment -StorageDrive $drive -Observation $bad -Media $isoRecord -VmRoot $vmRoot).apply_admitted) 'Plan admitted without memory headroom.'
+        $networked=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot $vmRoot -SwitchName 'LumaLab' `
             -EnableIntegrationService @('Heartbeat','Shutdown')
         Check ($networked.apply_admitted -and $networked.network_attached -and $networked.switch_type -ceq 'Internal' -and
             (@($networked.integration_services_enabled) -join ',') -ceq 'Heartbeat,Shutdown' -and -not $networked.host_file_copy) 'Opt-in plan differs.'
         foreach ($row in @(@('origin_authenticated',$true),@('listed_in_sha256sums',$false),@('held_and_hashed',$false),
             @('kind','vhdx'),@('bytes',1024),@('sha256',('A'*64)),@('name','../x.iso'),@('bytes',$true))) {
             $bad=Copy-Data $isoRecord; $bad.($row[0])=$row[1]
-            Refuses { Test-LumaHyperVDeployment -Observation $capable -Media $bad -VmRoot $vmRoot } '*' ('Bad media record accepted: '+$row[0])
+            Refuses { Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $bad -VmRoot $vmRoot } '*' ('Bad media record accepted: '+$row[0])
         }
-        foreach ($root in @('C:\LumaOS-VMs','D:\','D:\a\..\b','LumaOS-VMs','\\server\share\vms','D:\a b')) {
-            Refuses { Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot $root } '*VM root*' ('Bad VM root accepted: '+$root)
+        foreach ($root in @('C:\LumaOS-VMs',($drive+':\'),($drive+':\a\..\b'),'LumaOS-VMs','\\server\share\vms',($drive+':\a b'))) {
+            Refuses { Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot $root } '*VM root*' ('Bad VM root accepted: '+$root)
         }
 
         # ---- No state change without -Apply ---------------------------------
@@ -331,14 +340,14 @@ try {
         Check (-not (Test-Path -LiteralPath $vmRoot)) 'Plan-only run created VM folders.'
 
         # ---- Apply refusals before any state change -------------------------
-        $blocked=Test-LumaHyperVDeployment -Observation $laptop -Media $isoRecord -VmRoot $vmRoot
+        $blocked=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $laptop -Media $isoRecord -VmRoot $vmRoot
         Reset-Fake
         Refuses { Invoke-LumaHyperVDeployment -Plan $blocked -MediaLease $isoLease -Commands $mocks -Apply } '*plan has blockers*' 'Blocked plan applied.'
         Check ($script:Calls.Count -eq 0) 'Blocked apply called Hyper-V.'
-        $captured=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot $vmRoot -ObservationSource pinned-captured-data
+        $captured=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot $vmRoot -ObservationSource pinned-captured-data
         Refuses { Invoke-LumaHyperVDeployment -Plan $captured -MediaLease $isoLease -Commands $mocks -Apply } '*Apply refused*' 'Captured observation applied.'
         $unprivileged=Copy-Data $capable; $unprivileged.elevated=$false
-        $unprivilegedPlan=Test-LumaHyperVDeployment -Observation $unprivileged -Media $isoRecord -VmRoot $vmRoot
+        $unprivilegedPlan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $unprivileged -Media $isoRecord -VmRoot $vmRoot
         Check $unprivilegedPlan.apply_admitted 'Permission is an apply-time refusal, not a plan blocker.'
         Refuses { Invoke-LumaHyperVDeployment -Plan $unprivilegedPlan -MediaLease $isoLease -Commands $mocks -Apply } '*elevated prompt*' 'Unprivileged apply accepted.'
         $partialTable=@{}; foreach ($key in $mocks.Keys) { if ($key -cne 'Enable-VMTPM') { $partialTable[$key]=$mocks[$key] } }
@@ -350,13 +359,13 @@ try {
         Refuses { Invoke-LumaHyperVDeployment -Plan $plan -MediaLease $isoLease -Commands $mocks -Apply } '*replacement is forbidden*' 'Existing VM replaced.'
         Check (((CallNames) -join ',') -ceq 'Get-VM') 'Existing-VM refusal made more than the read-only lookup.'
         Reset-Fake
-        $collision=Join-Path $scratch 'vms-collision'
+        $collision=Join-Path $work 'vms-collision'
         $null=New-Item -ItemType Directory -Path (Join-Path $collision 'LumaOS-Desktop-Lab') -Force
-        $collisionPlan=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot $collision
+        $collisionPlan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot $collision
         Refuses { Invoke-LumaHyperVDeployment -Plan $collisionPlan -MediaLease $isoLease -Commands $mocks -Apply } '*directory exists*' 'Existing VM folder reused.'
         Check (@(CallNames | Where-Object { $_ -cin $stateChanging }).Count -eq 0) 'Folder refusal changed Hyper-V state.'
         Reset-Fake; $script:Fake.switches=@([pscustomobject]@{ Name='LumaLab'; SwitchType='External' })
-        $switchPlan=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot (Join-Path $scratch 'vms-switch') -SwitchName 'LumaLab'
+        $switchPlan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot (Join-Path $work 'vms-switch') -SwitchName 'LumaLab'
         Refuses { Invoke-LumaHyperVDeployment -Plan $switchPlan -MediaLease $isoLease -Commands $mocks -Apply } '*Internal or Private*' 'Changed switch accepted.'
         Check (@(CallNames | Where-Object { $_ -cin $stateChanging }).Count -eq 0) 'Switch refusal changed Hyper-V state.'
 
@@ -397,7 +406,7 @@ try {
 
         # ---- Mocked apply: VHDX media, internal switch, opt-in services -------
         Reset-Fake
-        $vhdxPlan=Test-LumaHyperVDeployment -Observation $capable -Media $vhdxRecord -VmRoot (Join-Path $scratch 'vms-vhdx') `
+        $vhdxPlan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $vhdxRecord -VmRoot (Join-Path $work 'vms-vhdx') `
             -SwitchName 'LumaLab' -EnableIntegrationService @('Heartbeat') -SecureBootTemplate OpenSourceShieldedVM
         $appliedVhdx=Invoke-LumaHyperVDeployment -Plan $vhdxPlan -MediaLease $vhdxLease -Commands $mocks -Apply
         Check (@(CallsOf 'Add-VMDvdDrive').Count -eq 0 -and @(CallsOf 'Add-VMHardDiskDrive').Count -eq 2) 'VHDX media must attach as a second disk.'
@@ -409,12 +418,12 @@ try {
 
         # ---- Failure mid-way leaves everything for owner review --------------
         Reset-Fake; $script:Fake.fail='Set-VMFirmware'
-        $failPlan=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot (Join-Path $scratch 'vms-fail')
+        $failPlan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot (Join-Path $work 'vms-fail')
         Refuses { Invoke-LumaHyperVDeployment -Plan $failPlan -MediaLease $isoLease -Commands $mocks -Apply } `
             "*stopped at step 'firmware'*nothing was deleted*vm LumaOS-Desktop-Lab*Remove-VM -Name 'LumaOS-Desktop-Lab'*" 'Failure report differs.'
         Check ((Test-Path -LiteralPath $failPlan.media_copy_path) -and @(CallsOf 'Enable-VMTPM').Count -eq 0) 'Failure must stop and keep created items.'
         Reset-Fake; $script:Fake.dynamicAfterSet=$true
-        $driftPlan=Test-LumaHyperVDeployment -Observation $capable -Media $isoRecord -VmRoot (Join-Path $scratch 'vms-drift')
+        $driftPlan=Test-LumaHyperVDeployment -StorageDrive $drive -Observation $capable -Media $isoRecord -VmRoot (Join-Path $work 'vms-drift')
         Refuses { Invoke-LumaHyperVDeployment -Plan $driftPlan -MediaLease $isoLease -Commands $mocks -Apply } '*Read-back differs from the plan: memory*' 'Read-back drift accepted.'
     } finally { $isoLease.Dispose(); $vhdxLease.Dispose() }
 
@@ -428,9 +437,9 @@ try {
         return [pscustomobject]@{ exit=$LASTEXITCODE; text=($output -join "`n"); flat=(($output -join ' ') -replace '\s+',' ') }
     }
     $planner=Join-Path $PSScriptRoot 'plan-hyperv.ps1'
-    $childRoot=Join-Path $scratch 'vms-child'
+    $childRoot=Join-Path $work 'vms-child'
     # Plan only against this host's live read-only observation. Never -Apply.
-    $live=Invoke-Child @('-File',$planner,'-Sha256SumsPath',$sumsPath,'-Sha256SumsSha256',$sumsPin,'-ImagePath',$isoPath,'-VmRoot',$childRoot)
+    $live=Invoke-Child @('-File',$planner,'-Sha256SumsPath',$sumsPath,'-Sha256SumsSha256',$sumsPin,'-ImagePath',$isoPath,'-VmRoot',$childRoot,'-StorageDrive',$drive)
     Check ($live.exit -eq 0) ('Live plan-only child failed: '+$live.text)
     $livePlan=$live.text | ConvertFrom-Json
     Check (-not $livePlan.apply_requested -and -not $livePlan.apply_result.applied -and $livePlan.apply_result.hyperv_calls -eq 0 -and
@@ -447,19 +456,19 @@ try {
     $read=Read-LumaHyperVHostObservation -Path $observationPath -Sha256 $observationPin
     Check ((Test-LumaHyperVHost -Observation $read).host_capable) 'Captured host observation does not round-trip.'
     $capturedChild=Invoke-Child @('-File',$planner,'-Sha256SumsPath',$sumsPath,'-Sha256SumsSha256',$sumsPin,'-ImagePath',$isoPath,
-        '-VmRoot',$childRoot,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin)
+        '-VmRoot',$childRoot,'-StorageDrive',$drive,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin)
     Check ($capturedChild.exit -eq 0) ('Captured plan child failed: '+$capturedChild.text)
     $capturedPlan=$capturedChild.text | ConvertFrom-Json
     Check ($capturedPlan.observation_source -ceq 'pinned-captured-data' -and -not $capturedPlan.apply_admitted -and
         -not $capturedPlan.apply_result.applied) 'Captured plan child admitted apply.'
     $capturedApply=Invoke-Child @('-File',$planner,'-Sha256SumsPath',$sumsPath,'-Sha256SumsSha256',$sumsPin,'-ImagePath',$isoPath,
-        '-VmRoot',$childRoot,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin,'-Apply')
+        '-VmRoot',$childRoot,'-StorageDrive',$drive,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin,'-Apply')
     Check ($capturedApply.exit -ne 0 -and $capturedApply.flat -like '*Apply refuses a captured observation*') 'Captured -Apply was not refused.'
     $mismatch=Invoke-Child @('-File',$planner,'-Sha256SumsPath',$wrongSumsPath,'-Sha256SumsSha256',(Hash-Data $wrongSums),
-        '-ImagePath',$wrongIso,'-VmRoot',$childRoot,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin)
+        '-ImagePath',$wrongIso,'-VmRoot',$childRoot,'-StorageDrive',$drive,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin)
     Check ($mismatch.exit -ne 0 -and $mismatch.flat -like '*differs from its SHA256SUMS entry*') 'Child accepted a checksum mismatch.'
     $unpinned=Invoke-Child @('-File',$planner,'-Sha256SumsPath',$sumsPath,'-Sha256SumsSha256',('0'*64),'-ImagePath',$isoPath,
-        '-VmRoot',$childRoot,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin)
+        '-VmRoot',$childRoot,'-StorageDrive',$drive,'-ObservationPath',$observationPath,'-ObservationSha256',$observationPin)
     Check ($unpinned.exit -ne 0 -and $unpinned.flat -like '*independent pin differs*') 'Child accepted a substituted SHA256SUMS.'
     Check (-not (Test-Path -LiteralPath $childRoot)) 'Refused children created VM folders.'
     function Quote-Script([string]$Value) { return "'"+$Value.Replace("'","''")+"'" }

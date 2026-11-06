@@ -1,5 +1,5 @@
 [Unit]
-Description=Luma dedicated D-backed ext4 build store
+Description=Luma dedicated E-backed ext4 build store
 After=local-fs.target
 Before=luma-build-docker.service
 

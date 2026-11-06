@@ -34,7 +34,7 @@ BLOCK = 2 * MIB
 OPTIONS = 'subformat=dynamic,block_size=2097152,log_size=1048576,block_state_zero=on'
 OUTPUT = 'luma-hyperv-live-installer.vhdx'
 PRIVATE_STAGE = Path('/mnt/luma-build/work')
-PUBLIC_EXPORT = Path('/mnt/d/LumaOS-builds')
+PUBLIC_EXPORT = Path('/mnt/e/LumaOS-builds')
 
 
 def require(value, message):

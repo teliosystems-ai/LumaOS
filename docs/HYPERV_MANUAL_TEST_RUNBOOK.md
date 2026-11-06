@@ -21,7 +21,9 @@ lists the owner's options for an image that Hyper-V will start.
 `check-hyperv-host.ps1` reads the host and prints JSON. It changes nothing. On
 2026-11-03 it reported this for the development laptop. The evidence is in
 `D:\LumaOS-builds\gwin0-hyperv-20261103-a\check-hyperv-host.json`, SHA256
-`50f7249a04be173e6a25f639e4ddbb9c59ac811c79c485e5a6f89481bcc365db`.
+`50f7249a04be173e6a25f639e4ddbb9c59ac811c79c485e5a6f89481bcc365db`. Since
+2026-11-05 the build drive is E:, and the copy is at the same path under
+`E:\LumaOS-builds`.
 
 | Check | Observed | Needed | Status |
 | --- | --- | --- | --- |
@@ -72,9 +74,9 @@ candidate-19 payload needs more than 6,732 MiB.
 
 The owner puts the candidate-19 export on a download location of their choice.
 Agents never upload or publish it. The files come from
-`D:/LumaOS-builds/native/20261028T162354Z-desktop`. That D disk reports bad
-blocks, so copy them to sound storage first. A copy counts only if its
-`SHA256SUMS` check passes. The test needs only two files:
+`E:/LumaOS-builds/native/20261028T162354Z-desktop`. They were built on the old
+D disk, which reports bad blocks, and copied to E: (NVMe, NTFS) on 2026-11-05.
+Any copy, including the E: one, counts only if its `SHA256SUMS` check passes. The test needs only two files:
 
 | File | Bytes | SHA256 |
 | --- | ---: | --- |
@@ -310,7 +312,7 @@ for this lab test.
 
 ## 7. Evidence to return
 
-Put these files in one folder, for example `D:\LumaOS-builds\hyperv-manual-<yyyymmdd>\`,
+Put these files in one folder, for example `E:\LumaOS-builds\hyperv-manual-<yyyymmdd>\`,
 and keep a second copy on sound storage:
 
 - `host-check.json`, from before and after the host changes;
@@ -346,6 +348,6 @@ These suites run with mocked Hyper-V cmdlets. They need no Hyper-V and change
 no host state. Run them in Windows PowerShell 5.1:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-deploy.ps1 -WorkRoot D:\LumaOS-builds
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-plan.ps1 -WorkRoot D:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-deploy.ps1 -WorkRoot E:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-plan.ps1 -WorkRoot E:\LumaOS-builds
 ```

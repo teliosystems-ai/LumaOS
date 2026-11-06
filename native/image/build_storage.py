@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Admission for the dedicated D:-backed WSL build daemon; no fallback to C:."""
+"""Admission for the dedicated E:-backed WSL build daemon; no fallback to C:.
+
+The build drive moved from D: (exFAT USB) to E: (NTFS NVMe) on 2026-11-05.
+"""
 import argparse
 import json
 import os
@@ -11,8 +14,11 @@ import subprocess
 import tomllib
 
 STORE = Path('/mnt/luma-build')
-BACKING = Path('/mnt/d/LumaOS-builds/docker/luma-build-v1.ext4')
-SIZE = 160*1024**3
+BUILD_DRIVE = 'E:'
+BUILD_MOUNT = Path('/mnt/e')
+BUILD_ROOT = BUILD_MOUNT/'LumaOS-builds'
+BACKING = BUILD_ROOT/'docker'/'luma-build-v1.ext4'
+SIZE = 256*1024**3
 ENDPOINT = 'unix:///run/luma-build-docker.sock'
 CONFIG = Path('/etc/luma-build/storage.json')
 GIB = 1024**3
@@ -85,7 +91,7 @@ def validate_mount(record, backing):
             or not re.fullmatch(r'/dev/loop[0-9]+', record.get('source', ''))
             or 'rw' not in record.get('options', '').split(',')
             or backing != str(BACKING)):
-        raise ValueError('build store is not the expected writable D:-backed ext4 mount')
+        raise ValueError('build store is not the expected writable '+BUILD_DRIVE+'-backed ext4 mount')
 
 
 def profile():
@@ -102,8 +108,8 @@ def profile():
 
 def verify_backing():
     outer = mount_info(BACKING)
-    if outer['target'] != '/mnt/d' or outer['source'] != 'D:'+chr(92) or outer['fstype'] != '9p':
-        raise ValueError('D: is not mounted at the expected WSL path')
+    if outer['target'] != str(BUILD_MOUNT) or outer['source'] != BUILD_DRIVE+chr(92) or outer['fstype'] != '9p':
+        raise ValueError(BUILD_DRIVE+' is not mounted at the expected WSL path')
     metadata = BACKING.lstat()
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != SIZE:
         raise ValueError('build backing file was replaced or resized')
@@ -164,7 +170,7 @@ def validate_daemon(info):
     runtime = info.get('Containerd', {})
     if (runtime.get('Address') != '/run/luma-build-containerd/containerd.sock'
             or runtime.get('Namespaces', {}).get('Containers') != 'luma-build'):
-        raise ValueError('shared/default containerd is not admitted for D-only builds')
+        raise ValueError('shared/default containerd is not admitted for '+BUILD_DRIVE+'-only builds')
 
 
 def validate_runtime(record):
@@ -175,7 +181,7 @@ def validate_runtime(record):
             or record.get('temp') != str(STORE/'tmp/containerd')
             or record.get('grpc', {}).get('address') != '/run/luma-build-containerd/containerd.sock'
             or not {'io.containerd.cri.v1.images', 'io.containerd.cri.v1.runtime'}.issubset(record.get('disabled_plugins', []))):
-        raise ValueError('effective containerd configuration is not the dedicated D: profile')
+        raise ValueError('effective containerd configuration is not the dedicated '+BUILD_DRIVE+' profile')
 
 
 def check_space(path, minimum_gib):
@@ -199,11 +205,11 @@ def preflight(repository, external, edition):
             path = Path(os.environ.get(name, '/')).resolve(strict=True)
             if not path.is_relative_to(STORE) or not path.is_dir():
                 raise ValueError(name+' must use the dedicated build store')
-        if not external or Path(external).resolve() != Path('/mnt/d/LumaOS-builds'):
-            raise ValueError('dedicated builds require D:/LumaOS-builds artifacts')
+        if not external or Path(external).resolve() != BUILD_ROOT:
+            raise ValueError('dedicated builds require '+BUILD_DRIVE+'/LumaOS-builds artifacts')
         check_space(STORE, 32 if desktop else 24)
         check_space(external, 60 if desktop else 40)
-        print('Verified D:-backed Docker and temporary storage; no C: build-space reservation.', flush=True)
+        print('Verified '+BUILD_DRIVE+'-backed Docker and temporary storage; no C: build-space reservation.', flush=True)
     else:
         check_space(repository, 8 if external else (24 if desktop else 16))
         if external:
@@ -221,7 +227,7 @@ def main():
         mount_store()
     elif args.action == 'verify':
         verify_store()
-        print('Verified dedicated D:-backed ext4 store.')
+        print('Verified dedicated '+BUILD_DRIVE+'-backed ext4 store.')
     elif args.action == 'assembly-memory':
         print('Assembly host memory admission: '+json.dumps(admit_assembly_memory(), separators=(',', ':')), flush=True)
     else:

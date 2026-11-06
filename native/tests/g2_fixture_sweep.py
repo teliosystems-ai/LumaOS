@@ -22,7 +22,7 @@ import time
 from requirement1_sweep import source_target
 
 IMAGE = 'luma-native-tools:20260927'
-BUILD_ROOTS = (Path('/mnt/luma-build'), Path('/mnt/d/LumaOS-builds'))
+BUILD_ROOTS = (Path('/mnt/luma-build'), Path('/mnt/e/LumaOS-builds'))
 CAPS = ('CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETUID', 'SETGID', 'SETPCAP',
         'KILL', 'SYS_CHROOT', 'AUDIT_WRITE')
 MAX_LOG = 64 * 1024 * 1024

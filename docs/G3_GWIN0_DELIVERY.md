@@ -319,14 +319,15 @@ bootloader; only installed slots A/B receive Admin PCR approvals. Explicit indep
 external source/public-key pins to the signed root and retained source archive;
 the historical pinned repair mode remains the default.
 
-Private converter construction requires protected D-backed ext4 staging;
-public Windows-readable export is a separate implemented step, not an exFAT custody
+Private converter construction requires protected E-backed ext4 staging;
+public Windows-readable export is a separate implemented step, not a custody
 boundary. A real small cross-OS export exercises that mechanism; full desktop
 conversion and complete media assembly remain open. The converter/planner does not install or start Hyper-V, commission a TPM,
 enroll firmware keys, create a distribution or deliver an installed desktop.
-All bulk builds and generated media stay on D; source remains on C. Existing
-images and failed-attempt evidence are preserved unless separately retired
-under the approved cleanup workflow.
+All bulk builds and generated media stay on E (moved from D on 2026-11-05;
+see the [relocation record](../native/evidence/NATIVE_E_BUILD_DRIVE_2026-11-05.md));
+source remains on C. Existing images and failed-attempt evidence are preserved
+unless separately retired under the approved cleanup workflow.
 
 ## Decisions and platform dependencies
 

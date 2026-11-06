@@ -35,9 +35,9 @@ small ordinary-user NTFS fixtures; they do not provision the System-owned
 authority or mutate host TPM custody:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hosted-capacity.ps1 -BuildRoot D:\LumaOS-builds -FixtureRoot C:\Users\hakim\LumaOS\.luma
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-plan.ps1 -WorkRoot D:\LumaOS-builds
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-deploy.ps1 -WorkRoot D:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hosted-capacity.ps1 -BuildRoot E:\LumaOS-builds -FixtureRoot C:\Users\hakim\LumaOS\.luma
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-plan.ps1 -WorkRoot E:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-hyperv-deploy.ps1 -WorkRoot E:\LumaOS-builds
 ```
 
 `test-hyperv-deploy.ps1` runs the download, plan and apply paths against
@@ -45,7 +45,7 @@ mocked Hyper-V cmdlets only.
 
 Use an existing local NTFS fixture directory inside the development workspace;
 the test creates a unique small subdirectory. Compiler and bulk outputs remain
-on D. Process-only RemoteSigned does not change saved execution policy.
+on E (the build drive since 2026-11-05). Process-only RemoteSigned does not change saved execution policy.
 
 ## Authenticated first-Admin-only ephemeral file read
 
@@ -223,8 +223,8 @@ Optional JSON inputs enable two additional read-only checks:
 
 ```powershell
 .\packaging\windows\preflight.ps1 -StorageDrive D -DistributionName LumaOS-Dev `
-    -GuestMemoryGiB 12 -StoragePlanPath D:\LumaOS-builds\windows-storage-plan.json `
-    -ReleasePolicyPath D:\LumaOS-builds\windows-release-comparison.json
+    -GuestMemoryGiB 12 -StoragePlanPath E:\LumaOS-builds\windows-storage-plan.json `
+    -ReleasePolicyPath E:\LumaOS-builds\windows-release-comparison.json
 ```
 
 `planning_observations_passed` requires the original development observations,
@@ -364,10 +364,10 @@ configuration disables automatic drive mounts, executable interoperation and
 Windows PATH inheritance. These are declared bytes, not effective confinement
 or bootability evidence.
 
-Run the disposable fixture suite on D with the approved process-only policy:
+Run the disposable fixture suite on E with the approved process-only policy:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-package.ps1 -WorkRoot D:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-package.ps1 -WorkRoot E:\LumaOS-builds
 ```
 
 Fixture archives include a header-only ELF; they are not runnable product
@@ -405,7 +405,7 @@ local OpenSSL 3 executable. Do not obtain either pin from the candidate package.
 For example, after setting the two pin variables from reviewed inputs:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\verify-package-signature.ps1 -PackageDirectory D:\candidate -SignaturePath D:\reviewed\candidate.sig -AnchorPath D:\reviewed\lab-anchor.json -AnchorSha256 $anchorPin -OpenSslPath 'C:\Program Files\Git\usr\bin\openssl.exe' -OpenSslSha256 $verifierPin -WorkRoot C:\Users\hakim\LumaOS\.luma -CompilerWorkRoot D:\LumaOS-builds
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\verify-package-signature.ps1 -PackageDirectory D:\candidate -SignaturePath D:\reviewed\candidate.sig -AnchorPath D:\reviewed\lab-anchor.json -AnchorSha256 $anchorPin -OpenSslPath 'C:\Program Files\Git\usr\bin\openssl.exe' -OpenSslSha256 $verifierPin -WorkRoot C:\Users\hakim\LumaOS\.luma -CompilerWorkRoot E:\LumaOS-builds
 ```
 
 `WorkRoot` must support persistent Windows ACLs. The verifier atomically creates
@@ -413,9 +413,10 @@ a private GUID child for its bounded public signature inputs, checks its owner
 and protected DACL through a pinned handle, and removes only its known files
 before deleting that same directory through the handle. Input ancestors remain
 pinned against rename/delete; reparse points are refused. Existing parent ACLs
-are not changed. **This host's D drive is exFAT**, so it remains suitable for
-bulk archives and compiler fixtures but is refused for private verifier scratch.
-The repository `.luma` directory on NTFS is used only for tiny temporary
+are not changed. This host's former D build drive was exFAT and was refused
+for private verifier scratch. The build drive is now E (NTFS, since
+2026-11-05); it has not yet been exercised as verifier scratch, so the
+commands here keep it for bulk archives and compiler fixtures. The repository `.luma` directory on NTFS is used only for tiny temporary
 security metadata, not builds, images or caches. `CompilerWorkRoot` keeps
 PowerShell compiler scratch separate; it defaults to `WorkRoot` if omitted.
 
@@ -427,11 +428,11 @@ its DLLs or other runtime dependencies. Consequently `package_authenticated`,
 remain false. The verifier imports no distribution, executes no package code
 and makes no saved host-policy changes.
 
-Run the complete signature and storage-safety suite with D-backed bulk fixtures
+Run the complete signature and storage-safety suite with E-backed bulk fixtures
 and the repository's explicit NTFS security-metadata directory:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-package.ps1 -WorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-package.ps1 -WorkRoot E:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
 ```
 
 Without `SecurityWorkRoot`, the suite reports content and storage-capability
@@ -454,7 +455,7 @@ After preparing the enrollment file and setting `$enrollmentFile` to its
 absolute NTFS path, request the inert review:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\inspect-enrolled-file.ps1 -EnrollmentPath $enrollmentFile -CompilerWorkRoot D:\LumaOS-builds -ReviewOnly
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\inspect-enrolled-file.ps1 -EnrollmentPath $enrollmentFile -CompilerWorkRoot E:\LumaOS-builds -ReviewOnly
 ```
 
 Check the SID, directory, exact relative path, size and expected hash. Copy the
@@ -462,7 +463,7 @@ returned `read-exact-file:HASH` confirmation only after reviewing those fields:
 
 ```powershell
 $confirmation = Read-Host 'Enter the reviewed exact read confirmation'
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\inspect-enrolled-file.ps1 -EnrollmentPath $enrollmentFile -CompilerWorkRoot D:\LumaOS-builds -Confirmation $confirmation
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\inspect-enrolled-file.ps1 -EnrollmentPath $enrollmentFile -CompilerWorkRoot E:\LumaOS-builds -Confirmation $confirmation
 ```
 
 The reader refuses elevated/service/impersonated tokens and enabled bypass
@@ -482,10 +483,10 @@ permissions are not changed. `input_authenticated`, `product_grants`,
 `gate_closing` remain false. Serialization can deliver a prefix if the process or
 consumer stops; this is not a product export session or persistent enrollment.
 
-Run the actual ordinary-user NTFS fixtures with compiler scratch on D:
+Run the actual ordinary-user NTFS fixtures with compiler scratch on E:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-ingestion.ps1 -CompilerWorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-ingestion.ps1 -CompilerWorkRoot E:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
 ```
 
 Only new disposable fixture children are created. ACL-denial tests change the
@@ -518,7 +519,7 @@ The isolated test generates only ephemeral software keys. Compiler and public
 fixtures use D; tiny owned NTFS fixtures exercise hard links and reparse paths:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-signature.ps1 -WorkRoot D:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-signature.ps1 -WorkRoot E:\LumaOS-builds -SecurityWorkRoot C:\Users\hakim\LumaOS\.luma
 ```
 
 ## Existing custody object inspection
@@ -537,7 +538,7 @@ The record also preserves the earlier empty-name software fixture key incident
 and its fingerprint-pinned deletion and verified absence.
 
 ```powershell
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-custody.ps1 -WorkRoot D:\LumaOS-builds
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File .\packaging\windows\test-platform-custody.ps1 -WorkRoot E:\LumaOS-builds
 ```
 
 See [the shared implementation plan](../../docs/G3_GWIN0_IMPLEMENTATION.md).

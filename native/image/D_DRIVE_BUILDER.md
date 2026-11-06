@@ -1,5 +1,12 @@
 # D: build storage and recovery record
 
+> **Superseded 2026-11-05:** builds no longer use D:. The build root is
+> `E:\LumaOS-builds` (`/mnt/e/LumaOS-builds`), and the dedicated build store
+> `luma-build-v1.ext4` was moved there. See the
+> [E: build drive record](../evidence/NATIVE_E_BUILD_DRIVE_2026-11-05.md) and
+> [native/host/README.md](../host/README.md) for the current profile. This file
+> is kept as history.
+
 Current checkpoint, 2026-09-30: sequence 9 passed its four-stage Secure Boot/TCG
 PAM/PCR fixture including verified late storage teardown; broader regression
 is running. Sequence 10 (`20260930T073705Z-headless`) is building on D: with

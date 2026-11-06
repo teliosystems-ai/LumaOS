@@ -1,9 +1,18 @@
-# Dedicated D-backed Luma build host
+# Dedicated E-backed Luma build host
 
 This is host setup for the current Windows/Ubuntu WSL development machine,
 not configuration installed into the Luma OS image. The source repository
 remains at `C:\Users\hakim\LumaOS`. Public images/installers, inputs, logs and
-VM disks remain under `D:\LumaOS-builds`.
+VM disks remain under `E:\LumaOS-builds`.
+
+**Build drive moved to E: on 2026-11-05.** The owner copied all of
+`D:\LumaOS-builds` (Sonnics USB, exFAT, health Warning) to `E:\LumaOS-builds`
+(Lexar NVMe, NTFS) and asked that E: be used from now on. The store script,
+`environment.sh`, the unit descriptions and the Windows test scripts now
+name E:. See the [relocation record](../evidence/NATIVE_E_BUILD_DRIVE_2026-11-05.md).
+Paths under `D:` in older evidence are kept as recorded; the same relative
+path under `E:\LumaOS-builds` holds the copy. The `build-on-d.sh` wrapper and
+the `dedicated-d` profile name are historical identifiers and still apply.
 
 Current execution direction: **implementation first**, then a consolidated
 image-test sweep and separate native Ubuntu testing. The owner-approved WSL
@@ -15,7 +24,7 @@ The dedicated profile uses:
 
 | Purpose | Location |
 | --- | --- |
-| 160 GiB ext4 backing file (created at 96 GiB; grown online 2026-10-31, [evidence](../evidence/NATIVE_D_BUILD_STORE_GROW_2026-10-31.md)) | `D:\LumaOS-builds\docker\luma-build-v1.ext4` |
+| 256 GiB ext4 backing file (created at 96 GiB; grown online to 160 GiB 2026-10-31, [evidence](../evidence/NATIVE_D_BUILD_STORE_GROW_2026-10-31.md); moved to E: and grown online to 256 GiB 2026-11-05, [evidence](../evidence/NATIVE_E_BUILD_DRIVE_2026-11-05.md)) | `E:\LumaOS-builds\docker\luma-build-v1.ext4` |
 | Linux mount | `/mnt/luma-build` |
 | Docker images, layers and volumes | `/mnt/luma-build/docker` |
 | Dedicated containerd persistent state | `/mnt/luma-build/containerd` |
@@ -24,8 +33,9 @@ The dedicated profile uses:
 | Dedicated socket | `/run/luma-build-docker.sock` |
 | Host configuration | `/etc/luma-build` |
 
-The old `build-store.ext4` is preserved; it was not recognized as an ext4
-filesystem during read-only inspection. No physical partition is formatted.
+The old `build-store.ext4` was never formatted. On 2026-11-05 a full read of
+its E: copy found only zero bytes, and the owner deleted both copies. No
+physical partition is formatted.
 Existing `/var/lib/docker`, `/var/lib/containerd`, default Docker settings,
 unrelated workloads and historical build/TPM volumes are not moved or deleted.
 Only selected public Luma images and the lab-key volume are copied. The keys
@@ -33,7 +43,7 @@ travel directly between local containers and are checked without printing key
 bytes or creating a public archive. The original key volume stays intact.
 
 The backing file contains private laboratory keys once that copy completes.
-Linux permissions protect the mounted key volume, but the exFAT backing file
+Linux permissions protect the mounted key volume, but the backing file
 is **not encrypted** and can be copied by someone with Windows/drive access.
 Do not publish the backing file or use it for production signing custody.
 
@@ -118,15 +128,16 @@ python3 native/image/build_storage.py preflight \
 ```
 
 The expected Docker root is `/mnt/luma-build/docker`, using `overlay2`.
-The builder verifies the exact D: backing file, writable ext4 loop mount,
+The builder verifies the exact E: backing file, writable ext4 loop mount,
 identity marker, dedicated daemon, client temp/config paths and free space.
-It requires 32 GiB free inside the Linux store and 60 GiB on D: for desktop
+It requires 32 GiB free inside the Linux store and 60 GiB on E: for desktop
 builds (24/40 GiB for headless), instead of reserving build space on C:.
 Once the host profile is installed, the ordinary `build.sh` command also
 selects it automatically. On other hosts without that profile, the original
 portable behavior remains. `LUMA_BUILD_PROFILE=standard` is an explicit legacy
-opt-out with the older C:/repository guard; do not use it for this D-only setup.
-An unavailable D: drive or wrong daemon fails closed, never falling back to C:.
+opt-out with the older C:/repository guard; do not use it for this E-only setup.
+An unavailable E: drive or wrong daemon fails closed, never falling back to C:
+or to the old D: copy.
 
 The dedicated Docker service depends on the verified store mount. To start it
 after WSL startup if necessary, use Windows PowerShell:
@@ -157,8 +168,8 @@ it does not promise zero Windows pagefile, system-log or IDE writes on C:.
 No global WSL shutdown, default distribution move or Windows paging change is
 part of this setup.
 
-Do not unplug D: while mounted. Before safe removal, finish/stop only Luma's
+Do not detach E: while mounted. Before removal, finish/stop only Luma's
 dedicated jobs, then stop `luma-build-docker.service` followed by
 `luma-build-store.service` as WSL root. Never force unmount a busy store. Both
-the outer exFAT filesystem and inner ext4 filesystem need clean shutdown; this
+the outer NTFS filesystem and inner ext4 filesystem need clean shutdown; this
 laboratory setup is not damaged-media or power-loss certification.

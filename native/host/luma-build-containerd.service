@@ -1,5 +1,5 @@
 [Unit]
-Description=Luma isolated D-backed containerd
+Description=Luma isolated E-backed containerd
 Requires=luma-build-store.service
 After=luma-build-store.service
 Before=luma-build-docker.service

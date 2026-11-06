@@ -338,9 +338,9 @@ class HyperVImageTests(unittest.TestCase):
         finally:
             os.close(fd)
 
-    def test_public_outer_d_is_never_a_private_stage(self):
+    def test_public_outer_build_drive_is_never_a_private_stage(self):
         with self.assertRaises(ValueError):
-            image.convert(self.raw, 'a'*64, Path('/mnt/d/LumaOS-builds/hyperv-untrusted'),
+            image.convert(self.raw, 'a'*64, Path('/mnt/e/LumaOS-builds/hyperv-untrusted'),
                           Path('/usr/bin/qemu-img'), 'b'*64)
 
     def export_fixture(self):

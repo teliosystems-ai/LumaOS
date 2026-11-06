@@ -118,6 +118,14 @@ class BuildStorageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             storage.validate_mount(record, '/mnt/c/wrong.ext4')
 
+    def test_backing_file_must_be_on_the_e_build_drive(self):
+        self.assertEqual(storage.BACKING, Path('/mnt/e/LumaOS-builds/docker/luma-build-v1.ext4'))
+        for outer in ({'target':'/mnt/d', 'source':'D:'+chr(92), 'fstype':'9p'},
+                      {'target':'/mnt/e', 'source':'D:'+chr(92), 'fstype':'9p'},
+                      {'target':'/mnt/e', 'source':'E:'+chr(92), 'fstype':'ext4'}):
+            with self.subTest(outer=outer), mock.patch.object(storage, 'mount_info', return_value=outer),                     self.assertRaises(ValueError):
+                storage.verify_backing()
+
     def test_daemon_root_and_classic_driver_both_required(self):
         record = self.daemon_info()
         storage.validate_daemon(record)
@@ -129,7 +137,7 @@ class BuildStorageTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 storage.validate_daemon({**record, 'Containerd':runtime})
 
-    def test_verified_d_profile_checks_d_not_repository_free_space(self):
+    def test_verified_build_drive_profile_checks_it_not_repository_free_space(self):
         environment = {'DOCKER_HOST':storage.ENDPOINT,
                        'TMPDIR':str(storage.STORE/'client/tmp'),
                        'DOCKER_CONFIG':str(storage.STORE/'client/docker')}
@@ -141,17 +149,20 @@ class BuildStorageTests(unittest.TestCase):
                 mock.patch.object(Path, 'resolve', lambda self, **kwargs:self), \
                 mock.patch.object(Path, 'is_dir', return_value=True), \
                 mock.patch.object(storage, 'check_space') as check:
-            storage.preflight(Path('/mnt/c/repo'), '/mnt/d/LumaOS-builds', 'desktop')
+            storage.preflight(Path('/mnt/c/repo'), '/mnt/e/LumaOS-builds', 'desktop')
             verified.assert_called_once()
             self.assertEqual(check.call_args_list,
-                             [mock.call(storage.STORE,32), mock.call('/mnt/d/LumaOS-builds',60)])
+                             [mock.call(storage.STORE,32), mock.call('/mnt/e/LumaOS-builds',60)])
+            for retired in ('/mnt/d/LumaOS-builds', '/mnt/c/LumaOS-builds'):
+                with self.subTest(external=retired), self.assertRaises(ValueError):
+                    storage.preflight(Path('/mnt/c/repo'), retired, 'desktop')
             os.environ['TMPDIR'] = '/mnt/c/temp'
             with self.assertRaises(ValueError):
-                storage.preflight(Path('/mnt/c/repo'), '/mnt/d/LumaOS-builds', 'desktop')
+                storage.preflight(Path('/mnt/c/repo'), '/mnt/e/LumaOS-builds', 'desktop')
             os.environ['TMPDIR'] = environment['TMPDIR']
             os.environ['DOCKER_CONTEXT'] = 'desktop-linux'
             with self.assertRaises(ValueError):
-                storage.preflight(Path('/mnt/c/repo'), '/mnt/d/LumaOS-builds', 'desktop')
+                storage.preflight(Path('/mnt/c/repo'), '/mnt/e/LumaOS-builds', 'desktop')
 
     def test_effective_containerd_configuration_cannot_redirect_to_c(self):
         record = {'root':str(storage.STORE/'containerd'), 'state':'/run/luma-build-containerd',
@@ -170,15 +181,15 @@ class BuildStorageTests(unittest.TestCase):
                 mock.patch.object(storage, 'verify_store', side_effect=ValueError('missing mount')), \
                 mock.patch.object(storage, 'command') as command:
             with self.assertRaises(ValueError):
-                storage.preflight(Path('/mnt/c/repo'), '/mnt/d/LumaOS-builds', 'headless')
+                storage.preflight(Path('/mnt/c/repo'), '/mnt/e/LumaOS-builds', 'headless')
             command.assert_not_called()
 
     def test_legacy_external_build_retains_c_space_guard(self):
         with mock.patch.dict(os.environ, {'DOCKER_HOST':'unix:///var/run/docker.sock'}), \
                 mock.patch.object(storage, 'check_space') as check:
-            storage.preflight(Path('/mnt/c/repo'), '/mnt/d/LumaOS-builds', 'headless')
+            storage.preflight(Path('/mnt/c/repo'), '/mnt/e/LumaOS-builds', 'headless')
             self.assertEqual(check.call_args_list,
-                             [mock.call(Path('/mnt/c/repo'),8), mock.call('/mnt/d/LumaOS-builds',40)])
+                             [mock.call(Path('/mnt/c/repo'),8), mock.call('/mnt/e/LumaOS-builds',40)])
 
 
 if __name__ == '__main__':

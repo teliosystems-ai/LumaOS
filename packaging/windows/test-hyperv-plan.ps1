@@ -2,11 +2,11 @@
 param([Parameter(Mandatory)][string] $WorkRoot)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if ($env:OS -cne 'Windows_NT' -or $WorkRoot -notmatch '\AD:\\LumaOS-builds(?:\\[A-Za-z0-9_. -]+)*\z') {
-    throw 'Native Windows tests require existing D:\LumaOS-builds scratch.'
+if ($env:OS -cne 'Windows_NT' -or $WorkRoot -notmatch '\AE:\\LumaOS-builds(?:\\[A-Za-z0-9_. -]+)*\z') {
+    throw 'Native Windows tests require existing E:\LumaOS-builds scratch.'
 }
 $parent=Get-Item -LiteralPath $WorkRoot -Force
-if ($parent -isnot [IO.DirectoryInfo]) { throw 'Existing D scratch directory required.' }
+if ($parent -isnot [IO.DirectoryInfo]) { throw 'Existing E scratch directory required.' }
 $walk=$parent
 while ($null -ne $walk) {
     if (($walk.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'No scratch reparse ancestors.' }

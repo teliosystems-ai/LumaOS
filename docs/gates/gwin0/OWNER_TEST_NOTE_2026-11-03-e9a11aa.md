@@ -12,17 +12,19 @@ import, register, launch or sign it, and they did not upload it anywhere.
 | Source cut | `e9a11aac64ce6da55dd706cd3a22ebd64fb0ed4c`, the local `feature/g3-functional-beta` head and the sequence-20 native build cut: the `e9a11aa` merge of the NF08 direct index lost-reply recovery. The Windows tools are unchanged since `ce84c8c` |
 | Record | [combined_workspace_inference_2026-11-03-e9a11aa.json](combined_workspace_inference_2026-11-03-e9a11aa.json) |
 | Location on D | `D:\LumaOS-builds\gwin-integrated-package-20261103-e9a11aa-2wCUNqTs-public\package` |
+| Location on E (since 2026-11-05) | `E:\LumaOS-builds\gwin-integrated-package-20261103-e9a11aa-2wCUNqTs-public\package`; all 7 `SHA256SUMS` entries matched on E on 2026-11-05 ([relocation record](../../../native/evidence/NATIVE_E_BUILD_DRIVE_2026-11-05.md)) |
 | `rootfs.tar` | 2,636,566,528 bytes, SHA-256 `34904ca8348fd3a0d11b879185c88e5a7131d23f8af9ca1ffd32606196d30d3c` |
 | `manifest.json` | 14,871 bytes, SHA-256 `5b96387800e34268735018dce3db02e126a5d0c073c01a4d7677f74228f48480` |
 | Archive | 225 members, 91 publisher-required files |
 | Inference profile | profile SHA-256 `6625d600b1be72aebed54c3333b569a84d38ac2c898679c19d9119c097a3084c`, runtime manifest SHA-256 `f4b0a49240ccbda3bb1d667ccf9e3a556f090b9dd8725b1319ac60486762e42a` |
-| Windows tools | `packaging\windows` at the source cut, including `validate-package.ps1`, `preflight.ps1` and `coexistence.ps1`; a copy is in `D:\LumaOS-builds\gwin-integrated-package-20261103-e9a11aa-2wCUNqTs-public\source\packaging\windows` |
+| Windows tools | `packaging\windows` at the source cut, including `validate-package.ps1`, `preflight.ps1` and `coexistence.ps1`; a copy is in `D:\LumaOS-builds\gwin-integrated-package-20261103-e9a11aa-2wCUNqTs-public\source\packaging\windows`, and since 2026-11-05 in `E:\LumaOS-builds\gwin-integrated-package-20261103-e9a11aa-2wCUNqTs-public\source\packaging\windows` |
 
 The public directory one level above the package also holds `SHA256SUMS`. It
 names the same two files under build-container paths
 (`/evidence/integrated-package/...`), so compare the hashes, not the paths.
 The 2026-11-03 `ce84c8c`, 2026-10-31, 2026-10-27 and 2026-10-20 packages
-remain on D and are unchanged.
+remain on D and are unchanged; since 2026-11-05 copies are under
+`E:\LumaOS-builds` at the same names.
 
 The package is unsigned, and this refresh produced only the two package
 files. It did not produce the hosted authority bundle
@@ -43,8 +45,9 @@ agent. The layout follows `docs/gates/gwin0/MANUAL_QUALIFICATION_RUNBOOK.md`
 (section "Download layout and conventions"), which requires a new, empty
 folder on a fixed local NTFS volume. Network shares, removable drives,
 cloud-synced folders (OneDrive and similar) and recalled or offline
-placeholders are out of scope. This host's D drive is exFAT, so it does not
-qualify as the download location; check free space on the NTFS volume you use
+placeholders are out of scope. This host's former D build drive is exFAT, so it
+does not qualify as the download location. The E build drive (internal NVMe,
+NTFS, since 2026-11-05) meets the filesystem rule; check free space on the NTFS volume you use
 (about 2.7 GB for the download, and an unmeasured amount for the imported
 virtual disk).
 

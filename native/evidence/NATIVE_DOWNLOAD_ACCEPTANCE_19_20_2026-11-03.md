@@ -27,6 +27,13 @@ sequence-19 components, so the two sequences are tested as one run: install
   15 files, `SHA256SUMS` pinned in section 3, and a raw image that was
   decompressed from the `.img.zst` and hashed. Agents never upload. The owner
   chooses the HTTPS location and uploads the folders.
+  **Update 2026-11-05:** the build drive moved to E:. Upload from
+  `E:\LumaOS-builds\downloads\candidate19-20261028T162354Z-desktop-a` and
+  `E:\LumaOS-builds\downloads\candidate20-20261103T215655Z-desktop-a`. On
+  2026-11-05 all 14 on-disk files in each folder matched `SHA256SUMS`. The
+  15th entry is the raw `.img`, which is checked after decompression and was
+  never stored in these folders, on D: or E:. See the
+  [relocation record](NATIVE_E_BUILD_DRIVE_2026-11-05.md).
 - **None of the steps below has been run by an agent** on a physical machine,
   on a USB stick, from a download, or as an install or update of these two
   sequences. Agents have run only live VM smokes under QEMU with Secure Boot:
